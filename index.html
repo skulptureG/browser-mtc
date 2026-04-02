@@ -13,7 +13,6 @@ body {
     padding: 30px;
 }
 
-/* ---------- TIMECODE ---------- */
 #timecode {
     font-size: 72px;
     letter-spacing: 6px;
@@ -21,7 +20,6 @@ body {
     text-shadow: 0 0 25px #00ff66;
 }
 
-/* ---------- STATUS ---------- */
 #status {
     display: inline-flex;
     align-items: center;
@@ -38,7 +36,6 @@ body {
     box-shadow: 0 0 6px #400;
 }
 
-/* ---------- CONTROLS ---------- */
 .controls button {
     font-size: 16px;
     padding: 12px 26px;
@@ -112,9 +109,12 @@ let midiOutput = null;
 let running = false;
 let timer = null;
 
-let fps = 25;
 let frames = 0, seconds = 0, minutes = 0, hours = 0;
 let qfIndex = 0;
+
+const fpsSelect = document.getElementById("fps");
+const led = document.getElementById("led");
+const statusText = document.getElementById("statusText");
 
 /* ================= MIDI ================= */
 navigator.requestMIDIAccess().then(midi => {
@@ -135,7 +135,7 @@ navigator.requestMIDIAccess().then(midi => {
     }
 });
 
-/* ================= TIME ================= */
+/* ================= HELPERS ================= */
 function pad(v) { return v.toString().padStart(2, "0"); }
 
 function updateDisplay() {
@@ -159,8 +159,8 @@ function setStatus(state) {
     }
 }
 
-/* ================= MTC CORE (CORRECT) ================= */
-function sendMTC() {
+/* ================= MTC ================= */
+function sendMTC(fps) {
     if (!midiOutput) return;
 
     const rateBits =
@@ -170,14 +170,14 @@ function sendMTC() {
         0b00;
 
     const qfData = [
-        frames & 0x0F,                          // 0 frame low
-        (frames >> 4) & 0x01,                   // 1 frame high
-        seconds & 0x0F,                         // 2 sec low
-        (seconds >> 4) & 0x03,                  // 3 sec high
-        minutes & 0x0F,                         // 4 min low
-        (minutes >> 4) & 0x03,                  // 5 min high
-        hours & 0x0F,                           // 6 hour low
-        ((hours >> 4) & 0x01) | (rateBits << 1) // 7 hour high + rate
+        frames & 0x0F,
+        (frames >> 4) & 0x01,
+        seconds & 0x0F,
+        (seconds >> 4) & 0x03,
+        minutes & 0x0F,
+        (minutes >> 4) & 0x03,
+        hours & 0x0F,
+        ((hours >> 4) & 0x01) | (rateBits << 1)
     ];
 
     midiOutput.send([0xF1, (qfIndex << 4) | qfData[qfIndex]]);
@@ -185,10 +185,11 @@ function sendMTC() {
 
 /* ================= TICK ================= */
 function tick() {
-    sendMTC();
+    const fps = parseInt(fpsSelect.value, 10);
 
-    // Isadora advances every 4 quarter frames
-    if (qfIndex === 3) {
+    sendMTC(fps);
+
+    if (qfIndex === 3) { // Isadora: advance every 4 QFs
         frames++;
         if (frames >= fps) {
             frames = 0;
@@ -212,10 +213,10 @@ function tick() {
 function play() {
     if (running) return;
 
-    fps = parseInt(fpsSelect?.value || fps);
     running = true;
     setStatus("RUNNING");
 
+    const fps = parseInt(fpsSelect.value, 10);
     timer = setInterval(tick, 1000 / (fps * 4));
 }
 
@@ -238,3 +239,4 @@ function stop() {
 
 </body>
 </html>
+``
