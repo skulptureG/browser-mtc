@@ -2,389 +2,144 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>MTC Generator – Isadora Compatible</title>
+<title>Simple MTC Generator (Isadora‑safe)</title>
 
 <style>
 body {
-    background: radial-gradient(circle at top, #111, #000);
-    color: #00ff66;
-    font-family: "Segoe UI", monospace;
-    margin: 0;
-    padding: 20px;
+    background:#000;
+    color:#0f0;
+    font-family:monospace;
+    text-align:center;
+    padding:20px;
 }
 
-/* ---------- PANELS ---------- */
-.panel {
-    background: linear-gradient(#050505, #000);
-    border: 1px solid #222;
-    border-radius: 10px;
-    padding: 16px;
-    margin-bottom: 16px;
-    box-shadow: inset 0 0 30px #000;
-}
-
-.panel h3 {
-    margin: 0 0 10px 0;
-    font-size: 12px;
-    letter-spacing: 2px;
-    opacity: 0.7;
-}
-
-/* ---------- TIMECODE ---------- */
 #timecode {
-    font-size: 72px;
-    text-align: center;
-    letter-spacing: 6px;
-    text-shadow: 0 0 25px #00ff66;
+    font-size:64px;
+    margin:20px 0;
 }
 
-/* ---------- STATUS LED ---------- */
-#status {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    margin-left: 12px;
-    font-size: 12px;
-}
-
-#led {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: #400;
-    box-shadow: 0 0 6px #400;
-}
-
-/* ---------- TRANSPORT ---------- */
-.controls {
-    text-align: center;
-}
-
-.controls button {
-    background: #111;
-    border: 1px solid #333;
-    border-radius: 8px;
-    color: #0f0;
-    padding: 10px 20px;
-    margin: 0 6px;
-    font-size: 14px;
-    cursor: pointer;
-}
-
-.stop { color:#f33; }
-.pause { color:#fb0; }
-
-/* ---------- TIMELINE ---------- */
-#timeline {
-    position: relative;
-    height: 16px;
-    background: #0a0a0a;
-    border-radius: 8px;
-    margin-top: 10px;
-}
-
-#playhead {
-    position: absolute;
-    top: -6px;
-    width: 3px;
-    height: 28px;
-    background: #00ff66;
-    box-shadow: 0 0 10px #00ff66;
-}
-
-.cue-marker {
-    position: absolute;
-    top: -8px;
-    width: 8px;
-    height: 32px;
-    border-radius: 2px;
-    background: #f44;
-}
-
-/* ---------- FORMS ---------- */
-input, select {
-    background: #111;
-    border: 1px solid #333;
-    color: #fff;
-    padding: 4px 6px;
-    margin-right: 6px;
-}
-
-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-}
-
-th, td {
-    padding: 6px;
-    border-bottom: 1px solid #222;
+button {
+    font-size:16px;
+    padding:10px 20px;
+    margin:5px;
 }
 </style>
 </head>
 
 <body>
 
-<!-- TIME PANEL -->
-<div class="panel">
-    <h3>SMPTE TIMECODE</h3>
-    <div id="timecode">00:00:00:00</div>
+<h2>MIDI Timecode Generator</h2>
 
-    <div style="text-align:center;margin-top:8px">
-        MIDI Out <select id="midiOut"></select>
-        FPS <select id="fps">
-            <option>24</option>
-            <option selected>25</option>
-            <option>30</option>
-        </select>
-        Isadora Mode <input type="checkbox" id="isadoraMode" checked>
+MIDI Out:
+<select id="midiOut"></select>
 
-        <span id="status">
-            <span id="led"></span>
-            <span id="statusText">STOPPED</span>
-        </span>
-    </div>
-</div>
+<div id="timecode">00:00:00:00</div>
 
-<!-- TRANSPORT -->
-<div class="panel">
-    <h3>TRANSPORT</h3>
-    <div class="controls">
-        <button onclick="play()">PLAY</button>
-        <button class="pause" onclick="pause()">PAUSE</button>
-        <button class="stop" onclick="stop()">STOP</button>
-    </div>
-</div>
-
-<!-- TIMELINE -->
-<div class="panel">
-    <h3>TIMELINE</h3>
-    Start <input id="startTC" value="00:00:00:00" size="10">
-    End <input id="endTC" value="00:00:10:00" size="10">
-    Loop <input type="checkbox" id="loop" checked>
-    Pause ms <input id="loopPause" type="number" value="1000" style="width:80px">
-
-    <div id="timeline">
-        <div id="playhead"></div>
-    </div>
-</div>
-
-<!-- CUES -->
-<div class="panel">
-    <h3>MIDI CUES</h3>
-    <button onclick="addCue()">ADD CUE @ CURRENT TC</button>
-
-    <table>
-        <thead>
-            <tr>
-                <th>Timecode</th>
-                <th>Name</th>
-                <th>Channel</th>
-                <th>Note</th>
-                <th></th>
-            </tr>
-        </thead>
-        <tbody id="cueTable"></tbody>
-    </table>
-</div>
+<button onclick="play()">Play</button>
+<button onclick="pause()">Pause</button>
+<button onclick="stop()">Stop</button>
 
 <script>
-/* ================= STATE ================= */
-let fps = 25;
-let frames=0,seconds=0,minutes=0,hours=0;
-let qfIndex=0, timer=null, running=false;
-let midiOutput=null;
-let cues=[];
+/* ================= CORE STATE ================= */
+let midiOutput = null;
+let running = false;
+let timer = null;
 
-const isadoraModeCheckbox = document.getElementById("isadoraMode");
-const led = document.getElementById("led");
-const statusText = document.getElementById("statusText");
+const fps = 25;              // match Isadora
+const qfPerFrame = 4;        // Isadora compatibility
+
+let frames = 0;
+let seconds = 0;
+let minutes = 0;
+let hours = 0;
+let qfIndex = 0;
 
 /* ================= MIDI ================= */
-navigator.requestMIDIAccess().then(m=>{
-    m.outputs.forEach(o=>{
-        let opt=document.createElement("option");
-        opt.value=o.id; opt.text=o.name;
+navigator.requestMIDIAccess().then(midi => {
+    midi.outputs.forEach(o => {
+        const opt = document.createElement("option");
+        opt.value = o.id;
+        opt.textContent = o.name;
         midiOut.appendChild(opt);
     });
-    midiOut.selectedIndex=0;
-    midiOutput=m.outputs.get(midiOut.value);
-    midiOut.onchange=()=>midiOutput=m.outputs.get(midiOut.value);
+
+    midiOut.onchange = () => {
+        midiOutput = midi.outputs.get(midiOut.value);
+    };
+
+    if (midiOut.options.length) {
+        midiOut.selectedIndex = 0;
+        midiOutput = midi.outputs.get(midiOut.value);
+    }
 });
 
-/* ================= TIME ================= */
-function parseTC(tc){
-    let [h,m,s,f]=tc.split(":").map(Number);
-    return (((h*60+m)*60+s)*fps)+f;
-}
-function setFromFrames(t){
-    frames=t%fps;
-    seconds=Math.floor(t/fps)%60;
-    minutes=Math.floor(t/(fps*60))%60;
-    hours=Math.floor(t/(fps*3600))%24;
-}
-function tcString(){
-    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}:${pad(frames)}`;
-}
-function pad(v){return v.toString().padStart(2,"0");}
-
-/* ================= TICK ================= */
-function tick(){
+/* ================= TIMECODE ================= */
+function tick() {
     sendMTC();
 
-    if(qfIndex===qfPerFrame-1){
-        let t=parseTC(tcString())+1;
-
-        if(t>parseTC(endTC.value)){
-            if(loop.checked){
-                pause();
-                setTimeout(()=>{
-                    setFromFrames(parseTC(startTC.value));
-                    cues.forEach(c=>c.fired=false);
-                    play();
-                },+loopPause.value);
-                return;
-            } else {
-                stop();
-                return;
+    if (qfIndex === qfPerFrame - 1) {
+        frames++;
+        if (frames >= fps) {
+            frames = 0;
+            seconds++;
+            if (seconds >= 60) {
+                seconds = 0;
+                minutes++;
+                if (minutes >= 60) {
+                    minutes = 0;
+                    hours = (hours + 1) % 24;
+                }
             }
         }
-
-        setFromFrames(t);
         updateDisplay();
-        checkCues(t);
     }
 
-    qfIndex=(qfIndex+1)%qfPerFrame;
+    qfIndex = (qfIndex + 1) % qfPerFrame;
 }
 
-/* ================= MTC ================= */
-function sendMTC(){
-    if(!midiOutput) return;
+function updateDisplay() {
+    timecode.textContent =
+        `${pad(hours)}:${pad(minutes)}:${pad(seconds)}:${pad(frames)}`;
+}
 
-    const rateBits = fps===25?1:fps===30?3:0;
-    const data=[
-        frames&15,
-        seconds&15,
-        minutes&15,
-        ((hours&31)|(rateBits<<5))
+function pad(v) {
+    return v.toString().padStart(2, "0");
+}
+
+/* ================= MTC (Isadora‑safe) ================= */
+function sendMTC() {
+    if (!midiOutput) return;
+
+    const rateBits = 0b01; // 25fps
+
+    const data = [
+        frames & 0x0F,
+        seconds & 0x0F,
+        minutes & 0x0F,
+        ((hours & 0x1F) | (rateBits << 5))
     ];
 
-    midiOutput.send([0xF1,(qfIndex<<4)|data[qfIndex]]);
-}
-
-/* ================= DISPLAY ================= */
-function updateDisplay(){
-    timecode.textContent=tcString();
-
-    let p=(parseTC(tcString())-parseTC(startTC.value))/
-          (parseTC(endTC.value)-parseTC(startTC.value));
-
-    playhead.style.left=(p*100)+"%";
-}
-
-/* ================= STATUS ================= */
-function setStatus(state){
-    if(state==="RUNNING"){
-        led.style.background="#0f0";
-        led.style.boxShadow="0 0 8px #0f0";
-    }
-    if(state==="PAUSED"){
-        led.style.background="#fb0";
-        led.style.boxShadow="0 0 8px #fb0";
-    }
-    if(state==="STOPPED"){
-        led.style.background="#400";
-        led.style.boxShadow="0 0 6px #400";
-    }
-    statusText.textContent=state;
-}
-
-/* ================= CUES ================= */
-function addCue(){
-    cues.push({
-        t:parseTC(tcString()),
-        name:"Cue "+(cues.length+1),
-        ch:0,
-        note:60,
-        fired:false
-    });
-    renderCues();
-}
-
-function renderCues(){
-    cueTable.innerHTML="";
-    document.querySelectorAll(".cue-marker").forEach(m=>m.remove());
-
-    cues.forEach((c,i)=>{
-        let tr=document.createElement("tr");
-        tr.innerHTML=`
-            <td><input value="${tcFromFrames(c.t)}"
-                onchange="cues[${i}].t=parseTC(this.value)"></td>
-            <td><input value="${c.name}"
-                onchange="cues[${i}].name=this.value"></td>
-            <td><input type="number" value="${c.ch+1}"
-                onchange="cues[${i}].ch=this.value-1"></td>
-            <td><input type="number" value="${c.note}"
-                onchange="cues[${i}].note=this.value"></td>
-            <td><button onclick="cues.splice(${i},1);renderCues()">✕</button></td>
-        `;
-        cueTable.appendChild(tr);
-
-        let m=document.createElement("div");
-        m.className="cue-marker";
-        let p=(c.t-parseTC(startTC.value))/
-              (parseTC(endTC.value)-parseTC(startTC.value));
-        m.style.left=(p*100)+"%";
-        timeline.appendChild(m);
-    });
-}
-
-function tcFromFrames(t){
-    let f=t%fps,s=Math.floor(t/fps)%60,
-        m=Math.floor(t/(fps*60))%60,
-        h=Math.floor(t/(fps*3600))%24;
-    return `${pad(h)}:${pad(m)}:${pad(s)}:${pad(f)}`;
-}
-
-function checkCues(t){
-    cues.forEach(c=>{
-        if(!c.fired && t>=c.t){
-            midiOutput.send([0x90|c.ch,c.note,100]);
-            setTimeout(()=>midiOutput.send([0x80|c.ch,c.note,0]),100);
-            c.fired=true;
-        }
-    });
+    midiOutput.send([0xF1, (qfIndex << 4) | data[qfIndex]]);
 }
 
 /* ================= TRANSPORT ================= */
-function play(){
-    if(running) return;
-
-    fps=parseFloat(fpsSelect?.value || fps);
-    qfPerFrame = isadoraModeCheckbox.checked ? 4 : 8;
-
-    running=true;
-    setStatus("RUNNING");
-    timer=setInterval(tick,1000/(fps*qfPerFrame));
+function play() {
+    if (running) return;
+    running = true;
+    timer = setInterval(tick, 1000 / (fps * qfPerFrame));
 }
 
-function pause(){
-    if(!running) return;
-    running=false;
+function pause() {
+    running = false;
     clearInterval(timer);
-    setStatus("PAUSED");
 }
 
-function stop(){
-    running=false;
-    clearInterval(timer);
-    setFromFrames(parseTC(startTC.value));
+function stop() {
+    pause();
+    frames = seconds = minutes = hours = 0;
     updateDisplay();
-    setStatus("STOPPED");
 }
 </script>
 
 </body>
 </html>
-``
