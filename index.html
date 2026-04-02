@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>MTC Generator – Spec / Isadora (Stable)</title>
+<title>MTC Generator – Stable + Loop</title>
 
 <style>
 body {
@@ -20,7 +20,6 @@ body {
     text-shadow: 0 0 25px #00ff66;
 }
 
-/* ---------- STATUS ---------- */
 #status {
     display: inline-flex;
     align-items: center;
@@ -34,65 +33,62 @@ body {
     height: 12px;
     border-radius: 50%;
     background: #400;
-    box-shadow: 0 0 6px #400;
 }
 
-/* ---------- CONTROLS ---------- */
-.controls button {
-    font-size: 16px;
-    padding: 12px 26px;
-    margin: 10px;
-    border-radius: 16px;
+.controls button, .midi button {
+    font-size: 15px;
+    padding: 10px 22px;
+    margin: 6px;
+    border-radius: 14px;
     border: none;
     cursor: pointer;
-    color: #000;
     font-weight: bold;
 }
 
-.play {
-    background: linear-gradient(#4cff4c, #1a9f1a);
-    box-shadow: 0 0 20px rgba(0,255,0,0.6);
-}
+.play  { background:#4cff4c; }
+.pause { background:#ffd84c; }
+.stop  { background:#ff4c4c; }
 
-.pause {
-    background: linear-gradient(#ffd84c, #c9a400);
-    box-shadow: 0 0 20px rgba(255,200,0,0.6);
-}
-
-.stop {
-    background: linear-gradient(#ff4c4c, #a00000);
-    box-shadow: 0 0 20px rgba(255,0,0,0.6);
-}
+.midi button { background:#3aaaff; }
 
 select, input {
-    background: #111;
-    color: #fff;
-    border: 1px solid #333;
-    padding: 6px;
-    margin-left: 6px;
+    background:#111;
+    color:#fff;
+    border:1px solid #333;
+    padding:6px;
+    margin-left:6px;
 }
 </style>
 </head>
 
 <body>
 
-<h2>MIDI Timecode Generator V.1.4</h2>
+<h2>MIDI Timecode Generator</h2>
 
-<div>
+<div class="midi">
+    <button onclick="initMIDI()">Enable MIDI</button>
     MIDI Out:
     <select id="midiOut"></select>
 
     FPS:
     <select id="fps">
-        <option value="24">24</option>
-        <option value="25" selected>25</option>
-        <option value="30">30</option>
-        <option value="50">50</option>
-        <option value="60">60</option>
+        <option>24</option>
+        <option selected>25</option>
+        <option>30</option>
+        <option>50</option>
+        <option>60</option>
     </select>
+</div>
 
-    Isadora Mode:
-    <input type="checkbox" id="isadoraMode" checked>
+<div style="margin-top:10px">
+    End TC:
+    <input id="endTC" value="00:00:10:00" size="10">
+
+    Loop:
+    <input type="checkbox" id="loopEnabled" checked>
+
+    Loop Pause (ms):
+    <input id="loopPause" type="number" value="1000" style="width:90px">
 </div>
 
 <div id="timecode">00:00:00:00</div>
@@ -109,186 +105,167 @@ select, input {
 </div>
 
 <script>
-/* ================= DOM ================= */
 const midiOutSelect = document.getElementById("midiOut");
 const fpsSelect = document.getElementById("fps");
-const isadoraCheckbox = document.getElementById("isadoraMode");
+const endTCInput = document.getElementById("endTC");
+const loopEnabled = document.getElementById("loopEnabled");
+const loopPauseInput = document.getElementById("loopPause");
 const led = document.getElementById("led");
 const statusText = document.getElementById("statusText");
 
-/* ================= STATE ================= */
 let midiAccess = null;
 let midiOutput = null;
 let running = false;
+let loopWaiting = false;
 
-let hours = 0, minutes = 0, seconds = 0, frames = 0;
+let h=0,m=0,s=0,f=0;
 let qfPiece = 0;
 let nextTickTime = 0;
 
-/* ================= STATUS ================= */
-function setStatus(state) {
-    statusText.textContent = state;
+/* ---------- STATUS ---------- */
+function setStatus(t){
+    statusText.textContent = t;
     led.style.background =
-        state === "RUNNING" ? "#0f0" :
-        state === "PAUSED"  ? "#fb0" : "#400";
+        t==="RUNNING" ? "#0f0" :
+        t==="PAUSED"  ? "#fb0" : "#400";
 }
 
-/* ================= MIDI INIT (USER GESTURE) ================= */
-function initMIDI() {
-    if (midiAccess) return;
+/* ---------- MIDI INIT ---------- */
+function initMIDI(){
+    if(midiAccess) return;
 
-    navigator.requestMIDIAccess().then(midi => {
+    navigator.requestMIDIAccess().then(midi=>{
         midiAccess = midi;
-        midiOutSelect.innerHTML = "";
+        midiOutSelect.innerHTML="";
 
-        midi.outputs.forEach(out => {
-            const opt = document.createElement("option");
-            opt.value = out.id;
-            opt.textContent = out.name;
+        midi.outputs.forEach(o=>{
+            const opt=document.createElement("option");
+            opt.value=o.id;
+            opt.textContent=o.name;
             midiOutSelect.appendChild(opt);
         });
 
-        if (midiOutSelect.options.length) {
-            midiOutSelect.selectedIndex = 0;
-            midiOutput = midi.outputs.get(midiOutSelect.value);
+        if(midiOutSelect.options.length){
+            midiOutSelect.selectedIndex=0;
+            midiOutput=midi.outputs.get(midiOutSelect.value);
         }
 
-        midiOutSelect.onchange = () => {
-            midiOutput = midi.outputs.get(midiOutSelect.value);
+        midiOutSelect.onchange=()=>{
+            midiOutput=midi.outputs.get(midiOutSelect.value);
         };
-    }).catch(err => {
-        console.error("MIDI access failed:", err);
     });
 }
 
-/* ================= TIME HELPERS ================= */
-function pad(v) { return v.toString().padStart(2, "0"); }
-
-function updateDisplay() {
-    timecode.textContent =
-        `${pad(hours)}:${pad(minutes)}:${pad(seconds)}:${pad(frames)}`;
-}
-
-/* ================= FRAME RATE HELPERS ================= */
-function getMTCBaseFps(fps) {
-    if (fps === 50) return 25;
-    if (fps === 60) return 30;
-    return fps;
-}
-
-function getFrameRateType(fps, dropFrame = false) {
-    if (fps === 24) return 0;
-    if (fps === 25) return 1;
-    if (fps === 29.97 && dropFrame) return 2;
+/* ---------- MTC ---------- */
+function getFrameRateType(fps){
+    if(fps===24) return 0;
+    if(fps===25) return 1;
     return 3;
 }
 
-/* ================= YOUR FUNCTION ================= */
-function buildQuarterFrameMessage(piece, hours, minutes, seconds, frames, fps, dropFrame) {
-    let nibbleValue = 0;
-
-    switch (piece) {
-        case 0: nibbleValue = frames & 0x0F; break;
-        case 1: nibbleValue = (frames >> 4) & 0x01; break;
-        case 2: nibbleValue = seconds & 0x0F; break;
-        case 3: nibbleValue = (seconds >> 4) & 0x03; break;
-        case 4: nibbleValue = minutes & 0x0F; break;
-        case 5: nibbleValue = (minutes >> 4) & 0x03; break;
-        case 6: nibbleValue = hours & 0x0F; break;
-        case 7:
-            nibbleValue =
-                ((hours >> 4) & 0x01) |
-                (getFrameRateType(fps, false) << 1);
-            break;
+function buildQuarterFrameMessage(piece,h,m,s,f,fps){
+    let v=0;
+    switch(piece){
+        case 0: v=f&15; break;
+        case 1: v=(f>>4)&1; break;
+        case 2: v=s&15; break;
+        case 3: v=(s>>4)&3; break;
+        case 4: v=m&15; break;
+        case 5: v=(m>>4)&3; break;
+        case 6: v=h&15; break;
+        case 7: v=((h>>4)&1)|(getFrameRateType(fps)<<1); break;
     }
-
-    return [0xF1, (piece << 4) | nibbleValue];
+    return [0xF1,(piece<<4)|v];
 }
 
-/* ================= CLOCK ================= */
-function advanceFrame(fps) {
-    frames++;
-    if (frames >= fps) {
-        frames = 0;
-        seconds++;
-        if (seconds >= 60) {
-            seconds = 0;
-            minutes++;
-            if (minutes >= 60) {
-                minutes = 0;
-                hours = (hours + 1) % 24;
-            }
+function advanceFrame(fps){
+    f++;
+    if(f>=fps){ f=0; s++; }
+    if(s>=60){ s=0; m++; }
+    if(m>=60){ m=0; h=(h+1)%24; }
+}
+
+function updateDisplay(){
+    timecode.textContent=
+        `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}:${String(f).padStart(2,"0")}`;
+}
+
+function parseTC(tc,fps){
+    const [hh,mm,ss,ff]=tc.split(":").map(Number);
+    return (((hh*60+mm)*60+ss)*fps)+ff;
+}
+
+function currentFrame(fps){
+    return (((h*60+m)*60+s)*fps)+f;
+}
+
+function tick(fps){
+    if(!midiOutput || loopWaiting) return;
+
+    midiOutput.send(buildQuarterFrameMessage(qfPiece,h,m,s,f,fps));
+
+    if(qfPiece===3 || qfPiece===7){
+        advanceFrame(fps);
+        updateDisplay();
+        checkEnd(fps);
+    }
+
+    qfPiece=(qfPiece+1)%8;
+}
+
+/* ---------- END / LOOP ---------- */
+function checkEnd(fps){
+    const endFrame=parseTC(endTCInput.value,fps);
+    if(currentFrame(fps)>=endFrame){
+        if(loopEnabled.checked){
+            loopWaiting=true;
+            setStatus("PAUSED");
+
+            setTimeout(()=>{
+                h=m=s=f=0;
+                qfPiece=0;
+                updateDisplay();
+                loopWaiting=false;
+                setStatus("RUNNING");
+            },parseInt(loopPauseInput.value)||0);
+        } else {
+            stop();
         }
     }
 }
 
-function tick(fps, baseFps) {
-    if (!midiOutput) return;
-
-    const msg = buildQuarterFrameMessage(
-        qfPiece,
-        hours,
-        minutes,
-        seconds,
-        frames,
-        baseFps,
-        false
-    );
-
-    midiOutput.send(msg);
-
-  
-if (qfPiece === 3 || qfPiece === 7) {
-    advanceFrame(fps);
-    updateDisplay();
-}
-
-    qfPiece = (qfPiece + 1) % 8;
-}
-
-/* ================= TRANSPORT ================= */
-function play() {
-    initMIDI(); // ✅ user gesture MIDI init
-
-    if (running) return;
-
-    running = true;
+/* ---------- TRANSPORT ---------- */
+function play(){
+    initMIDI();
+    if(running) return;
+    running=true;
     setStatus("RUNNING");
 
-    const fps = parseInt(fpsSelect.value, 10);
-    const baseFps = getMTCBaseFps(fps);
+    const fps=parseInt(fpsSelect.value);
+    const qfInterval=1000/(fps*8);
+    nextTickTime=performance.now();
+    qfPiece=0;
 
-    const qfRate =
-        isadoraCheckbox.checked ? baseFps * 4 : baseFps * 8;
-
-    const qfInterval = 1000 / qfRate;
-
-    nextTickTime = performance.now();
-    qfPiece = 0;
-
-    function scheduler(now) {
-        if (!running) return;
-
-        while (now >= nextTickTime) {
-            tick(fps, baseFps);
-            nextTickTime += qfInterval;
+    function sched(now){
+        if(!running) return;
+        while(now>=nextTickTime){
+            tick(fps);
+            nextTickTime+=qfInterval;
         }
-
-        requestAnimationFrame(scheduler);
+        requestAnimationFrame(sched);
     }
-
-    requestAnimationFrame(scheduler);
+    requestAnimationFrame(sched);
 }
 
-function pause() {
-    running = false;
+function pause(){
+    running=false;
     setStatus("PAUSED");
 }
 
-function stop() {
-    running = false;
-    hours = minutes = seconds = frames = 0;
-    qfPiece = 0;
+function stop(){
+    running=false;
+    h=m=s=f=0;
+    qfPiece=0;
     updateDisplay();
     setStatus("STOPPED");
 }
