@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>MTC Generator – Spec / Isadora (Correct)</title>
+<title>MTC Generator – Spec / Isadora (Stable)</title>
 
 <style>
 body {
@@ -76,7 +76,7 @@ select, input {
 
 <body>
 
-<h2>MIDI Timecode Generator v1.3</h2>
+<h2>MIDI Timecode Generator</h2>
 
 <div>
     MIDI Out:
@@ -110,47 +110,20 @@ select, input {
 
 <script>
 /* ================= DOM ================= */
-const midiOut = document.getElementById("midiOut");
+const midiOutSelect = document.getElementById("midiOut");
 const fpsSelect = document.getElementById("fps");
 const isadoraCheckbox = document.getElementById("isadoraMode");
 const led = document.getElementById("led");
 const statusText = document.getElementById("statusText");
 
 /* ================= STATE ================= */
+let midiAccess = null;
 let midiOutput = null;
 let running = false;
 
 let hours = 0, minutes = 0, seconds = 0, frames = 0;
 let qfPiece = 0;
-
 let nextTickTime = 0;
-
-/* ================= MIDI ================= */
-navigator.requestMIDIAccess().then(midi => {
-    midi.outputs.forEach(out => {
-        const opt = document.createElement("option");
-        opt.value = out.id;
-        opt.textContent = out.name;
-        midiOut.appendChild(opt);
-    });
-
-    if (midiOut.options.length) {
-        midiOut.selectedIndex = 0;
-        midiOutput = midi.outputs.get(midiOut.value);
-    }
-
-    midiOut.onchange = () => {
-        midiOutput = midi.outputs.get(midiOut.value);
-    };
-});
-
-/* ================= TIME HELPERS ================= */
-function pad(v) { return v.toString().padStart(2, "0"); }
-
-function updateDisplay() {
-    timecode.textContent =
-        `${pad(hours)}:${pad(minutes)}:${pad(seconds)}:${pad(frames)}`;
-}
 
 /* ================= STATUS ================= */
 function setStatus(state) {
@@ -158,6 +131,42 @@ function setStatus(state) {
     led.style.background =
         state === "RUNNING" ? "#0f0" :
         state === "PAUSED"  ? "#fb0" : "#400";
+}
+
+/* ================= MIDI INIT (USER GESTURE) ================= */
+function initMIDI() {
+    if (midiAccess) return;
+
+    navigator.requestMIDIAccess().then(midi => {
+        midiAccess = midi;
+        midiOutSelect.innerHTML = "";
+
+        midi.outputs.forEach(out => {
+            const opt = document.createElement("option");
+            opt.value = out.id;
+            opt.textContent = out.name;
+            midiOutSelect.appendChild(opt);
+        });
+
+        if (midiOutSelect.options.length) {
+            midiOutSelect.selectedIndex = 0;
+            midiOutput = midi.outputs.get(midiOutSelect.value);
+        }
+
+        midiOutSelect.onchange = () => {
+            midiOutput = midi.outputs.get(midiOutSelect.value);
+        };
+    }).catch(err => {
+        console.error("MIDI access failed:", err);
+    });
+}
+
+/* ================= TIME HELPERS ================= */
+function pad(v) { return v.toString().padStart(2, "0"); }
+
+function updateDisplay() {
+    timecode.textContent =
+        `${pad(hours)}:${pad(minutes)}:${pad(seconds)}:${pad(frames)}`;
 }
 
 /* ================= FRAME RATE HELPERS ================= */
@@ -171,10 +180,10 @@ function getFrameRateType(fps, dropFrame = false) {
     if (fps === 24) return 0;
     if (fps === 25) return 1;
     if (fps === 29.97 && dropFrame) return 2;
-    return 3; // 30 / 60
+    return 3;
 }
 
-/* ================= YOUR FUNCTION (UNCHANGED) ================= */
+/* ================= YOUR FUNCTION ================= */
 function buildQuarterFrameMessage(piece, hours, minutes, seconds, frames, fps, dropFrame) {
     let nibbleValue = 0;
 
@@ -214,6 +223,8 @@ function advanceFrame(fps) {
 }
 
 function tick(fps, baseFps) {
+    if (!midiOutput) return;
+
     const msg = buildQuarterFrameMessage(
         qfPiece,
         hours,
@@ -224,7 +235,7 @@ function tick(fps, baseFps) {
         false
     );
 
-    if (midiOutput) midiOutput.send(msg);
+    midiOutput.send(msg);
 
     if (qfPiece === 7) {
         advanceFrame(fps);
@@ -236,6 +247,8 @@ function tick(fps, baseFps) {
 
 /* ================= TRANSPORT ================= */
 function play() {
+    initMIDI(); // ✅ user gesture MIDI init
+
     if (running) return;
 
     running = true;
@@ -257,3 +270,28 @@ function play() {
 
         while (now >= nextTickTime) {
             tick(fps, baseFps);
+            nextTickTime += qfInterval;
+        }
+
+        requestAnimationFrame(scheduler);
+    }
+
+    requestAnimationFrame(scheduler);
+}
+
+function pause() {
+    running = false;
+    setStatus("PAUSED");
+}
+
+function stop() {
+    running = false;
+    hours = minutes = seconds = frames = 0;
+    qfPiece = 0;
+    updateDisplay();
+    setStatus("STOPPED");
+}
+</script>
+
+</body>
+</html>
