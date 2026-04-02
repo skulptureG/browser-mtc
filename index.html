@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>MTC Generator – Spec / Isadora Compatible</title>
+<title>MTC Generator – Spec / Isadora (Correct)</title>
 
 <style>
 body {
@@ -20,6 +20,7 @@ body {
     text-shadow: 0 0 25px #00ff66;
 }
 
+/* ---------- STATUS ---------- */
 #status {
     display: inline-flex;
     align-items: center;
@@ -36,6 +37,7 @@ body {
     box-shadow: 0 0 6px #400;
 }
 
+/* ---------- CONTROLS ---------- */
 .controls button {
     font-size: 16px;
     padding: 12px 26px;
@@ -74,7 +76,7 @@ select, input {
 
 <body>
 
-<h2>MIDI Timecode Generator</h2>
+<h2>MIDI Timecode Generator v1.3</h2>
 
 <div>
     MIDI Out:
@@ -107,7 +109,7 @@ select, input {
 </div>
 
 <script>
-/* ================= DOM REFERENCES ================= */
+/* ================= DOM ================= */
 const midiOut = document.getElementById("midiOut");
 const fpsSelect = document.getElementById("fps");
 const isadoraCheckbox = document.getElementById("isadoraMode");
@@ -118,8 +120,9 @@ const statusText = document.getElementById("statusText");
 let midiOutput = null;
 let running = false;
 
-let frames = 0, seconds = 0, minutes = 0, hours = 0;
-let qfIndex = 0;
+let hours = 0, minutes = 0, seconds = 0, frames = 0;
+let qfPiece = 0;
+
 let nextTickTime = 0;
 
 /* ================= MIDI ================= */
@@ -141,105 +144,116 @@ navigator.requestMIDIAccess().then(midi => {
     };
 });
 
-/* ================= HELPERS ================= */
-function pad(v){ return v.toString().padStart(2,"0"); }
+/* ================= TIME HELPERS ================= */
+function pad(v) { return v.toString().padStart(2, "0"); }
 
-function updateDisplay(){
+function updateDisplay() {
     timecode.textContent =
         `${pad(hours)}:${pad(minutes)}:${pad(seconds)}:${pad(frames)}`;
 }
 
-function setStatus(state){
+/* ================= STATUS ================= */
+function setStatus(state) {
     statusText.textContent = state;
     led.style.background =
-        state==="RUNNING" ? "#0f0" :
-        state==="PAUSED"  ? "#fb0" : "#400";
+        state === "RUNNING" ? "#0f0" :
+        state === "PAUSED"  ? "#fb0" : "#400";
 }
 
-/* ================= MTC ================= */
-function sendMTC(fps){
-    if (!midiOutput) return;
-
-    const rateBits =
-        fps===24?0b00 :
-        fps===25?0b01 :
-        fps===30?0b11 : 0b00;
-
-    const qfData = [
-        frames & 0x0F,
-        (frames >> 4) & 0x01,
-        seconds & 0x0F,
-        (seconds >> 4) & 0x03,
-        minutes & 0x0F,
-        (minutes >> 4) & 0x03,
-        hours & 0x0F,
-        ((hours >> 4) & 0x01) | (rateBits << 1)
-    ];
-
-    midiOutput.send([0xF1, (qfIndex << 4) | qfData[qfIndex]]);
+/* ================= FRAME RATE HELPERS ================= */
+function getMTCBaseFps(fps) {
+    if (fps === 50) return 25;
+    if (fps === 60) return 30;
+    return fps;
 }
 
-function advanceFrame(fps){
+function getFrameRateType(fps, dropFrame = false) {
+    if (fps === 24) return 0;
+    if (fps === 25) return 1;
+    if (fps === 29.97 && dropFrame) return 2;
+    return 3; // 30 / 60
+}
+
+/* ================= YOUR FUNCTION (UNCHANGED) ================= */
+function buildQuarterFrameMessage(piece, hours, minutes, seconds, frames, fps, dropFrame) {
+    let nibbleValue = 0;
+
+    switch (piece) {
+        case 0: nibbleValue = frames & 0x0F; break;
+        case 1: nibbleValue = (frames >> 4) & 0x01; break;
+        case 2: nibbleValue = seconds & 0x0F; break;
+        case 3: nibbleValue = (seconds >> 4) & 0x03; break;
+        case 4: nibbleValue = minutes & 0x0F; break;
+        case 5: nibbleValue = (minutes >> 4) & 0x03; break;
+        case 6: nibbleValue = hours & 0x0F; break;
+        case 7:
+            nibbleValue =
+                ((hours >> 4) & 0x01) |
+                (getFrameRateType(fps, false) << 1);
+            break;
+    }
+
+    return [0xF1, (piece << 4) | nibbleValue];
+}
+
+/* ================= CLOCK ================= */
+function advanceFrame(fps) {
     frames++;
-    if(frames>=fps){
-        frames=0; seconds++;
-        if(seconds>=60){
-            seconds=0; minutes++;
-            if(minutes>=60){
-                minutes=0; hours=(hours+1)%24;
+    if (frames >= fps) {
+        frames = 0;
+        seconds++;
+        if (seconds >= 60) {
+            seconds = 0;
+            minutes++;
+            if (minutes >= 60) {
+                minutes = 0;
+                hours = (hours + 1) % 24;
             }
         }
     }
 }
 
-function tick(fps){
-    sendMTC(fps);
+function tick(fps, baseFps) {
+    const msg = buildQuarterFrameMessage(
+        qfPiece,
+        hours,
+        minutes,
+        seconds,
+        frames,
+        baseFps,
+        false
+    );
 
-    if(qfIndex===7){
+    if (midiOutput) midiOutput.send(msg);
+
+    if (qfPiece === 7) {
         advanceFrame(fps);
         updateDisplay();
     }
 
-    qfIndex = (qfIndex+1)%8;
+    qfPiece = (qfPiece + 1) % 8;
 }
 
 /* ================= TRANSPORT ================= */
-function play(){
-    if(running) return;
+function play() {
+    if (running) return;
+
     running = true;
     setStatus("RUNNING");
 
-    const fps = parseInt(fpsSelect.value,10);
-    const qfRate = isadoraCheckbox.checked ? fps*4 : fps*8;
+    const fps = parseInt(fpsSelect.value, 10);
+    const baseFps = getMTCBaseFps(fps);
+
+    const qfRate =
+        isadoraCheckbox.checked ? baseFps * 4 : baseFps * 8;
+
     const qfInterval = 1000 / qfRate;
 
     nextTickTime = performance.now();
-    qfIndex = 0;
+    qfPiece = 0;
 
-    function scheduler(now){
-        if(!running) return;
-        while(now >= nextTickTime){
-            tick(fps);
-            nextTickTime += qfInterval;
-        }
-        requestAnimationFrame(scheduler);
-    }
-    requestAnimationFrame(scheduler);
-}
+    function scheduler(now) {
+        if (!running) return;
 
-function pause(){
-    running = false;
-    setStatus("PAUSED");
-}
-
-function stop(){
-    running = false;
-    frames=seconds=minutes=hours=0;
-    qfIndex=0;
-    updateDisplay();
-    setStatus("STOPPED");
-}
-</script>
-
-</body>
-</html>
+        while (now >= nextTickTime) {
+            tick(fps, baseFps);
