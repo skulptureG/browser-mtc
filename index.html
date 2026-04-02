@@ -74,7 +74,7 @@ select, input {
 
 <body>
 
-<h2>MIDI Timecode Generator v.1.2</h2>
+<h2>MIDI Timecode Generator</h2>
 
 <div>
     MIDI Out:
@@ -107,6 +107,14 @@ select, input {
 </div>
 
 <script>
+/* ================= DOM REFERENCES ================= */
+const midiOut = document.getElementById("midiOut");
+const fpsSelect = document.getElementById("fps");
+const isadoraCheckbox = document.getElementById("isadoraMode");
+const led = document.getElementById("led");
+const statusText = document.getElementById("statusText");
+
+/* ================= STATE ================= */
 let midiOutput = null;
 let running = false;
 
@@ -114,12 +122,7 @@ let frames = 0, seconds = 0, minutes = 0, hours = 0;
 let qfIndex = 0;
 let nextTickTime = 0;
 
-const fpsSelect = document.getElementById("fps");
-const isadoraCheckbox = document.getElementById("isadoraMode");
-const led = document.getElementById("led");
-const statusText = document.getElementById("statusText");
-
-/* MIDI */
+/* ================= MIDI ================= */
 navigator.requestMIDIAccess().then(midi => {
     midi.outputs.forEach(out => {
         const opt = document.createElement("option");
@@ -127,11 +130,18 @@ navigator.requestMIDIAccess().then(midi => {
         opt.textContent = out.name;
         midiOut.appendChild(opt);
     });
-    midiOut.selectedIndex = 0;
-    midiOutput = midi.outputs.get(midiOut.value);
-    midiOut.onchange = () => midiOutput = midi.outputs.get(midiOut.value);
+
+    if (midiOut.options.length) {
+        midiOut.selectedIndex = 0;
+        midiOutput = midi.outputs.get(midiOut.value);
+    }
+
+    midiOut.onchange = () => {
+        midiOutput = midi.outputs.get(midiOut.value);
+    };
 });
 
+/* ================= HELPERS ================= */
 function pad(v){ return v.toString().padStart(2,"0"); }
 
 function updateDisplay(){
@@ -146,8 +156,10 @@ function setStatus(state){
         state==="PAUSED"  ? "#fb0" : "#400";
 }
 
-/* Full spec MTC (always) */
+/* ================= MTC ================= */
 function sendMTC(fps){
+    if (!midiOutput) return;
+
     const rateBits =
         fps===24?0b00 :
         fps===25?0b01 :
@@ -191,9 +203,10 @@ function tick(fps){
     qfIndex = (qfIndex+1)%8;
 }
 
+/* ================= TRANSPORT ================= */
 function play(){
     if(running) return;
-    running=true;
+    running = true;
     setStatus("RUNNING");
 
     const fps = parseInt(fpsSelect.value,10);
@@ -203,3 +216,30 @@ function play(){
     nextTickTime = performance.now();
     qfIndex = 0;
 
+    function scheduler(now){
+        if(!running) return;
+        while(now >= nextTickTime){
+            tick(fps);
+            nextTickTime += qfInterval;
+        }
+        requestAnimationFrame(scheduler);
+    }
+    requestAnimationFrame(scheduler);
+}
+
+function pause(){
+    running = false;
+    setStatus("PAUSED");
+}
+
+function stop(){
+    running = false;
+    frames=seconds=minutes=hours=0;
+    qfIndex=0;
+    updateDisplay();
+    setStatus("STOPPED");
+}
+</script>
+
+</body>
+</html>
