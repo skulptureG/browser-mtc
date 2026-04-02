@@ -237,10 +237,11 @@ function tick(fps, baseFps) {
 
     midiOutput.send(msg);
 
-    if (qfPiece === 7) {
-        advanceFrame(fps);
-        updateDisplay();
-    }
+  
+if (qfPiece === 3 || qfPiece === 7) {
+    advanceFrame(fps);
+    updateDisplay();
+}
 
     qfPiece = (qfPiece + 1) % 8;
 }
