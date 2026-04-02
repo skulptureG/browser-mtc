@@ -2,26 +2,75 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Simple MTC Generator (Isadora‑safe)</title>
+<title>MTC Generator (Isadora Safe)</title>
 
 <style>
 body {
-    background:#000;
-    color:#0f0;
-    font-family:monospace;
-    text-align:center;
-    padding:20px;
+    background: radial-gradient(circle at top, #111, #000);
+    color: #00ff66;
+    font-family: "Segoe UI", monospace;
+    text-align: center;
+    padding: 30px;
 }
 
+/* ---------- TIMECODE ---------- */
 #timecode {
-    font-size:64px;
-    margin:20px 0;
+    font-size: 72px;
+    letter-spacing: 6px;
+    margin: 20px 0;
+    text-shadow: 0 0 25px #00ff66;
 }
 
-button {
-    font-size:16px;
-    padding:10px 20px;
-    margin:5px;
+/* ---------- STATUS ---------- */
+#status {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 20px;
+    font-size: 14px;
+}
+
+#led {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #400;
+    box-shadow: 0 0 6px #400;
+}
+
+/* ---------- CONTROLS ---------- */
+.controls button {
+    font-size: 16px;
+    padding: 12px 26px;
+    margin: 10px;
+    border-radius: 16px;
+    border: none;
+    cursor: pointer;
+    color: #000;
+    font-weight: bold;
+}
+
+.play {
+    background: linear-gradient(#4cff4c, #1a9f1a);
+    box-shadow: 0 0 20px rgba(0,255,0,0.6);
+}
+
+.pause {
+    background: linear-gradient(#ffd84c, #c9a400);
+    box-shadow: 0 0 20px rgba(255,200,0,0.6);
+}
+
+.stop {
+    background: linear-gradient(#ff4c4c, #a00000);
+    box-shadow: 0 0 20px rgba(255,0,0,0.6);
+}
+
+select {
+    background: #111;
+    color: #fff;
+    border: 1px solid #333;
+    padding: 6px;
+    margin-left: 6px;
 }
 </style>
 </head>
@@ -30,36 +79,49 @@ button {
 
 <h2>MIDI Timecode Generator</h2>
 
-MIDI Out:
-<select id="midiOut"></select>
+<div>
+    MIDI Out:
+    <select id="midiOut"></select>
+
+    FPS:
+    <select id="fps">
+        <option value="24">24</option>
+        <option value="25" selected>25</option>
+        <option value="30">30</option>
+        <option value="50">50</option>
+        <option value="60">60</option>
+    </select>
+</div>
 
 <div id="timecode">00:00:00:00</div>
 
-<button onclick="play()">Play</button>
-<button onclick="pause()">Pause</button>
-<button onclick="stop()">Stop</button>
+<div id="status">
+    <div id="led"></div>
+    <div id="statusText">STOPPED</div>
+</div>
+
+<div class="controls">
+    <button class="play" onclick="play()">PLAY</button>
+    <button class="pause" onclick="pause()">PAUSE</button>
+    <button class="stop" onclick="stop()">STOP</button>
+</div>
 
 <script>
-/* ================= CORE STATE ================= */
+/* ================= STATE ================= */
 let midiOutput = null;
 let running = false;
 let timer = null;
 
-const fps = 25;              // match Isadora
-const qfPerFrame = 4;        // Isadora compatibility
-
-let frames = 0;
-let seconds = 0;
-let minutes = 0;
-let hours = 0;
+let fps = 25;
+let frames = 0, seconds = 0, minutes = 0, hours = 0;
 let qfIndex = 0;
 
 /* ================= MIDI ================= */
 navigator.requestMIDIAccess().then(midi => {
-    midi.outputs.forEach(o => {
+    midi.outputs.forEach(out => {
         const opt = document.createElement("option");
-        opt.value = o.id;
-        opt.textContent = o.name;
+        opt.value = out.id;
+        opt.textContent = out.name;
         midiOut.appendChild(opt);
     });
 
@@ -73,11 +135,60 @@ navigator.requestMIDIAccess().then(midi => {
     }
 });
 
-/* ================= TIMECODE ================= */
+/* ================= TIME ================= */
+function pad(v) { return v.toString().padStart(2, "0"); }
+
+function updateDisplay() {
+    timecode.textContent =
+        `${pad(hours)}:${pad(minutes)}:${pad(seconds)}:${pad(frames)}`;
+}
+
+/* ================= STATUS ================= */
+function setStatus(state) {
+    statusText.textContent = state;
+
+    if (state === "RUNNING") {
+        led.style.background = "#0f0";
+        led.style.boxShadow = "0 0 10px #0f0";
+    } else if (state === "PAUSED") {
+        led.style.background = "#fb0";
+        led.style.boxShadow = "0 0 10px #fb0";
+    } else {
+        led.style.background = "#400";
+        led.style.boxShadow = "0 0 6px #400";
+    }
+}
+
+/* ================= MTC CORE (CORRECT) ================= */
+function sendMTC() {
+    if (!midiOutput) return;
+
+    const rateBits =
+        fps === 24 ? 0b00 :
+        fps === 25 ? 0b01 :
+        fps === 30 ? 0b11 :
+        0b00;
+
+    const qfData = [
+        frames & 0x0F,                          // 0 frame low
+        (frames >> 4) & 0x01,                   // 1 frame high
+        seconds & 0x0F,                         // 2 sec low
+        (seconds >> 4) & 0x03,                  // 3 sec high
+        minutes & 0x0F,                         // 4 min low
+        (minutes >> 4) & 0x03,                  // 5 min high
+        hours & 0x0F,                           // 6 hour low
+        ((hours >> 4) & 0x01) | (rateBits << 1) // 7 hour high + rate
+    ];
+
+    midiOutput.send([0xF1, (qfIndex << 4) | qfData[qfIndex]]);
+}
+
+/* ================= TICK ================= */
 function tick() {
     sendMTC();
 
-    if (qfIndex === qfPerFrame - 1) {
+    // Isadora advances every 4 quarter frames
+    if (qfIndex === 3) {
         frames++;
         if (frames >= fps) {
             frames = 0;
@@ -94,52 +205,37 @@ function tick() {
         updateDisplay();
     }
 
-    qfIndex = (qfIndex + 1) % qfPerFrame;
-}
-
-function updateDisplay() {
-    timecode.textContent =
-        `${pad(hours)}:${pad(minutes)}:${pad(seconds)}:${pad(frames)}`;
-}
-
-function pad(v) {
-    return v.toString().padStart(2, "0");
-}
-
-/* ================= MTC (Isadora‑safe) ================= */
-function sendMTC() {
-    if (!midiOutput) return;
-
-    const rateBits = 0b01; // 25fps
-
-    const data = [
-        frames & 0x0F,
-        seconds & 0x0F,
-        minutes & 0x0F,
-        ((hours & 0x1F) | (rateBits << 5))
-    ];
-
-    midiOutput.send([0xF1, (qfIndex << 4) | data[qfIndex]]);
+    qfIndex = (qfIndex + 1) % 8;
 }
 
 /* ================= TRANSPORT ================= */
 function play() {
     if (running) return;
+
+    fps = parseInt(fpsSelect?.value || fps);
     running = true;
-    timer = setInterval(tick, 1000 / (fps * qfPerFrame));
+    setStatus("RUNNING");
+
+    timer = setInterval(tick, 1000 / (fps * 4));
 }
 
 function pause() {
+    if (!running) return;
     running = false;
     clearInterval(timer);
+    setStatus("PAUSED");
 }
 
 function stop() {
-    pause();
+    running = false;
+    clearInterval(timer);
     frames = seconds = minutes = hours = 0;
+    qfIndex = 0;
     updateDisplay();
+    setStatus("STOPPED");
 }
 </script>
 
 </body>
 </html>
+``
