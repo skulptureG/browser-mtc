@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Browser MTC Generator</title>
+<style>
+    body {
+        background: #000;
+        color: #0f0;
+        font-family: monospace;
+        text-align: center;
+        padding: 30px;
+    }
+
+    #timecode {
+        font-size: 72px;
+        margin: 40px 0;
+        letter-spacing: 4px;
+    }
+
+    button, select {
+        font-size: 18px;
+        padding: 10px 20px;
+        margin: 10px;
+    }
+</style>
+</head>
+<body>
+
+<h2>MIDI MTC Generator</h2>
+
+<select id="midiOut"></select><br/>
+
+<div id="timecode">00:00:00:00</div>
+
+<button onclick="play()">Play</button>
+<button onclick="pause()">Pause</button>
+<button onclick="stop()">Stop</button>
+
+<script>
+let midiOutput = null;
+let running = false;
+let timer = null;
+
+const fps = 25;
+let frames = 0;
+let seconds = 0;
+let minutes = 0;
+let hours = 0;
+
+// ---------- MIDI SETUP ----------
+navigator.requestMIDIAccess().then(midi => {
+    const select = document.getElementById('midiOut');
+    midi.outputs.forEach(output => {
+        const opt = document.createElement('option');
+        opt.value = output.id;
+        opt.text = output.name;
+        select.appendChild(opt);
+    });
+
+    select.onchange = () => {
+        midiOutput = midi.outputs.get(select.value);
+    };
+
+    if (select.options.length > 0) {
+        select.selectedIndex = 0;
+        midiOutput = midi.outputs.get(select.value);
+    }
+});
+
+// ---------- TIME UPDATE ----------
+function tick() {
+    frames++;
+    if (frames >= fps) {
+        frames = 0;
+        seconds++;
+        if (seconds >= 60) {
+            seconds = 0;
+            minutes++;
+            if (minutes >= 60) {
+                minutes = 0;
+                hours = (hours + 1) % 24;
+            }
+        }
+    }
+
+    updateDisplay();
+    sendMTC();
+}
+
+function updateDisplay() {
+    document.getElementById('timecode').textContent =
+        `${pad(hours)}:${pad(minutes)}:${pad(seconds)}:${pad(frames)}`;
+}
+
+function pad(v) {
+    return v.toString().padStart(2, '0');
+}
+
+// ---------- MTC QUARTER FRAME ----------
+function sendMTC() {
+    if (!midiOutput) return;
+
+    const time = [
+        frames & 0x0F,
+        (frames >> 4) & 0x01,
+        seconds & 0x0F,
+        (seconds >> 4) & 0x03,
+        minutes & 0x0F,
+        (minutes >> 4) & 0x03,
+        hours & 0x0F,
+        ((hours >> 4) & 0x01) | (0b01 << 1) // 25fps
+    ];
+
+    for (let i = 0; i < 8; i++) {
+        midiOutput.send([0xF1, (i << 4) | time[i]]);
+    }
+}
+
+// ---------- CONTROLS ----------
+function play() {
+    if (running) return;
+    running = true;
+    timer = setInterval(tick, 1000 / fps);
+}
+
+function pause() {
+    running = false;
+    clearInterval(timer);
+}
+
+function stop() {
+    pause();
+    frames = seconds = minutes = hours = 0;
+    updateDisplay();
+}
+</script>
+
+</body>
+</html>
