@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>MTC Generator (Isadora Safe)</title>
+<title>MTC Generator (Isadora‑safe, RAF clock)</title>
 
 <style>
 body {
@@ -20,6 +20,7 @@ body {
     text-shadow: 0 0 25px #00ff66;
 }
 
+/* ---------- STATUS ---------- */
 #status {
     display: inline-flex;
     align-items: center;
@@ -36,6 +37,7 @@ body {
     box-shadow: 0 0 6px #400;
 }
 
+/* ---------- CONTROLS ---------- */
 .controls button {
     font-size: 16px;
     padding: 12px 26px;
@@ -107,10 +109,11 @@ select {
 /* ================= STATE ================= */
 let midiOutput = null;
 let running = false;
-let timer = null;
 
 let frames = 0, seconds = 0, minutes = 0, hours = 0;
 let qfIndex = 0;
+
+let nextTickTime = 0;
 
 const fpsSelect = document.getElementById("fps");
 const led = document.getElementById("led");
@@ -183,13 +186,12 @@ function sendMTC(fps) {
     midiOutput.send([0xF1, (qfIndex << 4) | qfData[qfIndex]]);
 }
 
-/* ================= TICK ================= */
-function tick() {
-    const fps = parseInt(fpsSelect.value, 10);
-
+/* ================= CLOCK TICK ================= */
+function tick(fps) {
     sendMTC(fps);
 
-    if (qfIndex === 3) { // Isadora: advance every 4 QFs
+    // Advance SMPTE frame ONLY after QF 7
+    if (qfIndex === 7) {
         frames++;
         if (frames >= fps) {
             frames = 0;
@@ -217,19 +219,32 @@ function play() {
     setStatus("RUNNING");
 
     const fps = parseInt(fpsSelect.value, 10);
-    timer = setInterval(tick, 1000 / (fps * 4));
+    const qfInterval = 1000 / (fps * 8);
+
+    nextTickTime = performance.now();
+
+    function scheduler(now) {
+        if (!running) return;
+
+        while (now >= nextTickTime) {
+            tick(fps);
+            nextTickTime += qfInterval;
+        }
+
+        requestAnimationFrame(scheduler);
+    }
+
+    requestAnimationFrame(scheduler);
 }
 
 function pause() {
     if (!running) return;
     running = false;
-    clearInterval(timer);
     setStatus("PAUSED");
 }
 
 function stop() {
     running = false;
-    clearInterval(timer);
     frames = seconds = minutes = hours = 0;
     qfIndex = 0;
     updateDisplay();
