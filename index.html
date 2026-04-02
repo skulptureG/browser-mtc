@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>MTC Generator (Isadora‑safe, RAF clock)</title>
+<title>MTC Generator – Spec / Isadora Modes</title>
 
 <style>
 body {
@@ -64,7 +64,7 @@ body {
     box-shadow: 0 0 20px rgba(255,0,0,0.6);
 }
 
-select {
+select, input[type="checkbox"] {
     background: #111;
     color: #fff;
     border: 1px solid #333;
@@ -76,7 +76,7 @@ select {
 
 <body>
 
-<h2>MIDI Timecode Generator</h2>
+<h2>MIDI Timecode Generator v.1.1</h2>
 
 <div>
     MIDI Out:
@@ -90,6 +90,9 @@ select {
         <option value="50">50</option>
         <option value="60">60</option>
     </select>
+
+    Isadora Mode:
+    <input type="checkbox" id="isadoraMode" checked>
 </div>
 
 <div id="timecode">00:00:00:00</div>
@@ -116,6 +119,7 @@ let qfIndex = 0;
 let nextTickTime = 0;
 
 const fpsSelect = document.getElementById("fps");
+const isadoraCheckbox = document.getElementById("isadoraMode");
 const led = document.getElementById("led");
 const statusText = document.getElementById("statusText");
 
@@ -162,15 +166,12 @@ function setStatus(state) {
     }
 }
 
-/* ================= MTC ================= */
-function sendMTC(fps) {
-    if (!midiOutput) return;
-
+/* ================= MTC SEND ================= */
+function sendMTC_Spec(fps) {
     const rateBits =
         fps === 24 ? 0b00 :
         fps === 25 ? 0b01 :
-        fps === 30 ? 0b11 :
-        0b00;
+        fps === 30 ? 0b11 : 0b00;
 
     const qfData = [
         frames & 0x0F,
@@ -186,29 +187,66 @@ function sendMTC(fps) {
     midiOutput.send([0xF1, (qfIndex << 4) | qfData[qfIndex]]);
 }
 
-/* ================= CLOCK TICK ================= */
-function tick(fps) {
-    sendMTC(fps);
+function sendMTC_Isadora(fps) {
+    const rateBits =
+        fps === 24 ? 0b00 :
+        fps === 25 ? 0b01 :
+        fps === 30 ? 0b11 : 0b00;
 
-    // Advance SMPTE frame ONLY after QF 7
-    if (qfIndex === 7) {
-        frames++;
-        if (frames >= fps) {
-            frames = 0;
-            seconds++;
-            if (seconds >= 60) {
-                seconds = 0;
-                minutes++;
-                if (minutes >= 60) {
-                    minutes = 0;
-                    hours = (hours + 1) % 24;
-                }
+    const qfMap = [
+        frames & 0x0F,
+        seconds & 0x0F,
+        minutes & 0x0F,
+        hours & 0x0F
+    ];
+
+    const qfIndexMap = [0, 2, 4, 6];
+
+    midiOutput.send([
+        0xF1,
+        (qfIndexMap[qfIndex] << 4) | qfMap[qfIndex]
+    ]);
+}
+
+/* ================= TICK ================= */
+function tick(fps, isIsadora) {
+    if (!midiOutput) return;
+
+    if (isIsadora) {
+        sendMTC_Isadora(fps);
+
+        if (qfIndex === 3) {
+            advanceFrame(fps);
+            updateDisplay();
+        }
+
+        qfIndex = (qfIndex + 1) % 4;
+    } else {
+        sendMTC_Spec(fps);
+
+        if (qfIndex === 7) {
+            advanceFrame(fps);
+            updateDisplay();
+        }
+
+        qfIndex = (qfIndex + 1) % 8;
+    }
+}
+
+function advanceFrame(fps) {
+    frames++;
+    if (frames >= fps) {
+        frames = 0;
+        seconds++;
+        if (seconds >= 60) {
+            seconds = 0;
+            minutes++;
+            if (minutes >= 60) {
+                minutes = 0;
+                hours = (hours + 1) % 24;
             }
         }
-        updateDisplay();
     }
-
-    qfIndex = (qfIndex + 1) % 8;
 }
 
 /* ================= TRANSPORT ================= */
@@ -219,15 +257,18 @@ function play() {
     setStatus("RUNNING");
 
     const fps = parseInt(fpsSelect.value, 10);
-    const qfInterval = 1000 / (fps * 8);
+    const isIsadora = isadoraCheckbox.checked;
+    const qfCount = isIsadora ? 4 : 8;
+    const qfInterval = 1000 / (fps * qfCount);
 
     nextTickTime = performance.now();
+    qfIndex = 0;
 
     function scheduler(now) {
         if (!running) return;
 
         while (now >= nextTickTime) {
-            tick(fps);
+            tick(fps, isIsadora);
             nextTickTime += qfInterval;
         }
 
